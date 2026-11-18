@@ -129,6 +129,63 @@ header() {
 
 footer() { fl "  ${GRY}$(rep '─' $((W-4)))${RST}"; fl "  ${GRY}${1}${RST}"; }
 
+# ---------- live header: the disk bar animates while things get deleted ----------
+# The header (rows 1-7) is pinned with a scroll region; results scroll below it.
+LIVE_START=""
+
+live_begin() {   # live_begin START_FREE_KB
+  LIVE_START=${1}; LIVE_SHOWN=${1}; LIVE_TARGET=${1}; LIVE_T=0
+  read -r LIVE_TOT _ <<< "$(disk)"
+  printf '%s' "${E}[8;${LINES_}r${E}[8;1H"
+}
+
+live_end() { LIVE_START=""; printf '%s' "${E}7${E}[r${E}8"; }
+
+# bar with the space reclaimed so far highlighted in green
+bar_live() {   # bar_live USED GAINED TOTAL WIDTH COLOR
+  local used=${1} gained=${2} tot=${3} w=${4} col=${5}
+  local eighths=$(( used * w * 8 / tot )) part=('' '▏' '▎' '▍' '▌' '▋' '▊' '▉')
+  local full=$((eighths/8)) rest=$((eighths%8)) cells g
+  cells=${full}; [ ${rest} -gt 0 ] && cells=$((cells+1))
+  g=$(( (gained * w + tot - 1) / tot )); [ ${gained} -le 0 ] && g=0
+  [ $((cells+g)) -gt ${w} ] && g=$((w-cells))
+  printf '%s' "${col}$(rep '█' ${full})${part[${rest}]}${GRN}$(rep '░' ${g})${GRY}$(rep '─' $((w-cells-g)))${RST}"
+}
+
+live_draw() {
+  local used=$((LIVE_TOT-LIVE_SHOWN)) gained=$((LIVE_SHOWN-LIVE_START)) pct col=${GRN} saved=${F} right=""
+  [ ${gained} -lt 0 ] && gained=0
+  pct=$(( used * 100 / LIVE_TOT ))
+  [ ${pct} -ge 75 ] && col=${YLW}; [ ${pct} -ge 90 ] && col=${RED}
+  [ ${gained} -ge 1024 ] && right="${GRN}▲ $(hs ${gained}) freed${RST}"
+  F=""
+  boxline "$(bar_live ${used} ${gained} ${LIVE_TOT} $((W-16)) "${col}") ${BLD}$(lpad "${pct}%" 4)${RST} ${GRY}used${RST}"
+  boxline "${BLD}$(hs ${LIVE_SHOWN})${RST} ${GRY}free of $(hs ${LIVE_TOT})${RST}" "${right}"
+  printf '%s' "${E}7${E}[4;1H${F}${E}8"
+  F=${saved}
+}
+
+# one animation frame: poll the disk now and then, ease the numbers towards it
+live_tick() {
+  [ -n "${LIVE_START}" ] || return 0
+  LIVE_T=$((LIVE_T+1))
+  [ $((LIVE_T % 5)) = 1 ] && LIVE_TARGET=$(free_kb)
+  local diff=$((LIVE_TARGET-LIVE_SHOWN)) step
+  [ ${diff} = 0 ] && return 0
+  step=$((diff/4)); [ ${step} = 0 ] && step=${diff}
+  LIVE_SHOWN=$((LIVE_SHOWN+step))
+  live_draw
+}
+
+# keep animating for a moment after the last deletion so the bar settles
+live_settle() {
+  local i
+  for ((i=0; i<30; i++)); do
+    live_tick; sleep 0.08
+    [ ${i} -gt 12 ] && [ "${LIVE_TARGET}" = "${LIVE_SHOWN}" ] && break
+  done
+}
+
 key() {
   local k r
   IFS= read -rsn1 k
@@ -162,6 +219,7 @@ work() {
   "$@" & local pid=$! i=0 t0=${SECONDS}
   while kill -0 ${pid} 2>/dev/null; do
     printf '\r  %s%s%s %s%s…%s %s(%ds)%s%s' "${ACC}" "${SPIN[i%10]}" "${RST}" "${WHT}" "$(trunc "${msg}" $((W-16)))" "${RST}" "${GRY}" $((SECONDS-t0)) "${RST}" "${E}[K"
+    live_tick
     i=$((i+1)); sleep 0.08
   done
   printf '\r%s' "${E}[K"
@@ -524,6 +582,7 @@ clean() {
   local n=${#CL_ID[@]} i before after freed rc sum=0 start
   start=$(free_kb)
   header; fl ""; show
+  live_begin "${start}"
   for ((i=0; i<n; i++)); do
     [ "${CL_SEL[i]}" = 1 ] || continue
     id=${CL_ID[i]}; info "${id}"; before=${CL_KB[i]}
@@ -543,9 +602,10 @@ clean() {
     fi
   done
   rm -f "${TMPD}/sizes"   # sizes changed, measure again next time
-  sleep 1
+  live_settle
   summary "${start}" ${sum}
   wait_enter
+  live_end
 }
 
 # ---------- file pickers: large files, installers, unused apps ----------
@@ -630,6 +690,7 @@ pick_files() {
 
   local i sum=0 start ok; start=$(free_kb)
   header; fl ""; show
+  live_begin "${start}"
   for ((i=0; i<n; i++)); do
     [ "${CL_SEL[i]}" = 1 ] || continue
     if [ "${MODE}" = trash ]; then
@@ -656,9 +717,10 @@ pick_files() {
       printf '  %sOK, empty it later from Finder to get the space back.%s\n' "${GRY}" "${RST}"
     fi
   fi
-  sleep 1
+  live_settle
   summary "${start}" ${sum}
   wait_enter
+  live_end
 }
 
 large_files() {
@@ -716,15 +778,17 @@ node_modules() {
 
   local i sum=0 start; start=$(free_kb)
   header; fl ""; show
+  live_begin "${start}"
   for ((i=0; i<n; i++)); do
     [ "${CL_SEL[i]}" = 1 ] || continue
     work "Deleting ${CL_LBL[i]}" rm -rf "${CL_ID[i]}"
     if [ -e "${CL_ID[i]}" ]; then result "${RED}" "${CL_NOTE[i]}" "couldn't delete everything"
     else result "${GRN}" "${CL_NOTE[i]}" "${CL_HS[i]} freed"; sum=$((sum+CL_KB[i])); fi
   done
-  sleep 1
+  live_settle
   summary "${start}" ${sum}
   wait_enter
+  live_end
 }
 
 # ======================= MENU =======================
@@ -778,7 +842,7 @@ START_KB=$(free_kb)
 
 on_exit() {
   kill $(jobs -p) 2>/dev/null
-  printf '%s' "${E}[?25h"; stty echo 2>/dev/null; tput rmcup 2>/dev/null
+  printf '%s' "${E}[r${E}[?25h"; stty echo 2>/dev/null; tput rmcup 2>/dev/null
   local freed=$(( $(free_kb) - START_KB ))
   if [ ${freed} -gt 102400 ]; then
     printf '  %s✻%s Freed this session: %s%s%s · %s free now\n' "${ACC}" "${RST}" "${BLD}" "$(hs ${freed})" "${RST}" "$(hs "$(free_kb)")"

@@ -53,6 +53,7 @@ bash cleaner.sh
 - **Apps:** every app sorted by when you last opened it, so you can spot the ones you forgot about. Apple's own apps are never listed.
 - **node_modules finder:** every `node_modules` folder in your home with its size and when the project was last touched.
 - **Move to Trash or delete:** for files and apps you choose between moving them to the Trash (undoable) or deleting them for good.
+- **Live disk bar:** while things get deleted, the bar at the top shrinks, the free space counts up and the reclaimed part lights up in green.
 - **Honest results:** if something can't be deleted (in use, or no permission) it tells you instead of showing a fake ✓.
 - **Keyboard driven:** arrow keys, space, enter. Press `o` in any list to check the old items. Works in Terminal, iTerm2, Warp, VS Code, etc.
 
